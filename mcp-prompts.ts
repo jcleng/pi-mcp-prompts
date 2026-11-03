@@ -14,9 +14,9 @@
  * See README.md for installation and usage.
  */
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { homedir, readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 // ---------------------------------------------------------------------------
