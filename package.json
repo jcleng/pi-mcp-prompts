@@ -1,0 +1,18 @@
+{
+  "name": "pi-mcp-prompts",
+  "version": "1.0.0",
+  "description": "Pi extension that exposes MCP prompts (prompts/list, prompts/get) via the /mcp-prompts command",
+  "type": "module",
+  "keywords": ["pi", "pi-agent", "mcp", "model-context-protocol", "prompts", "extension"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcleng/pi-mcp-prompts.git"
+  },
+  "homepage": "https://github.com/jcleng/pi-mcp-prompts#readme",
+  "bugs": "https://github.com/jcleng/pi-mcp-prompts/issues",
+  "files": ["mcp-prompts.ts", "README.md", "LICENSE"],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.0.0"
+  }
+}
