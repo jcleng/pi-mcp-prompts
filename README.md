@@ -8,14 +8,14 @@ not support MCP **prompts** at all (see upstream issue
 [earendil-works/pi#11439](https://github.com/earendil-works/pi/issues/11439),
 auto-closed, no-action). This extension fills that gap.
 
-It adds a single command, `/mcp-prompts`, that:
+It adds a `/mcp-prompts` command (interactive TUI) and two model-callable tools
+(`mcp_prompts_list`, `mcp_prompts_get`) that work in **every** mode — including
+pi-web / RPC, where the interactive dialog is unavailable.
 
-1. Reads the same `mcp.json` Pi uses (user-level `~/.pi/agent/mcp.json` and
-   project-level `<cwd>/.pi/mcp.json`).
-2. Connects to every enabled server (both `streamable-http` and `stdio` transports).
-3. Lists all prompts offered across servers.
-4. Lets you pick one, fills in any declared arguments, and loads the resulting
-   prompt text into the input editor — ready to send.
+How it works: it reads the same `mcp.json` Pi uses (user-level `~/.pi/agent/mcp.json`
+and project-level `<cwd>/.pi/mcp.json`), connects to every enabled server over both
+`streamable-http` and `stdio` transports, and serves the servers' prompts via the
+command (interactive) or the tools (model-driven, any mode).
 
 ## Why
 
@@ -62,7 +62,9 @@ ln -s "$PWD/pi-mcp-prompts/mcp-prompts.ts" ~/.pi/agent/extensions/mcp-prompts.ts
 
 ## Usage
 
-Inside an interactive Pi session:
+### Interactive TUI (CLI)
+
+Inside an interactive Pi terminal session:
 
 1. Type `/mcp-prompts`.
 2. A selector appears listing every prompt from every connected server, labelled
@@ -74,6 +76,33 @@ Inside an interactive Pi session:
 Example — with a server (e.g. `mcphub`) exposing prompts such as `online-search`,
 `work_code`, `tools-read_xlsx`, running `/mcp-prompts` shows them all and drops the
 chosen one into your editor.
+
+### pi-web / RPC mode (no dialog UI)
+
+pi-web runs sessions in **RPC mode**, whose client does not implement Pi's extension
+dialog subprotocol (`select` / `input` windows). So the interactive `/mcp-prompts`
+command is **TUI-only** there. Instead, the extension registers two
+**model-callable tools** that work in every mode, including pi-web:
+
+- **`mcp_prompts_list`** — lists the prompts offered by your configured MCP servers.
+  Optional `server` argument restricts the listing. Returns a JSON array of
+  `{ server, name, title, description, arguments }`.
+- **`mcp_prompts_get`** — fetches the full text of one prompt. Arguments:
+  `server` (required), `name` (required), `arguments` (optional object of argument
+  name → value). Returns the rendered prompt text.
+
+In pi-web, just ask the agent naturally, e.g.:
+
+> “List the MCP prompts available.”
+>
+> “Use the `online-search` MCP prompt from `mcphub` and search for …”
+
+The model calls `mcp_prompts_list` / `mcp_prompts_get` for you and uses the result
+as instructions — no manual selection needed. These tools are also available in the
+CLI if you prefer letting the model drive.
+
+> Note: in non-TUI modes the `/mcp-prompts` command prints a hint to use the tools
+> instead of opening a (non-functional) selector.
 
 ## How it works
 

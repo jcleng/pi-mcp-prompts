@@ -360,35 +360,155 @@ function renderPrompt(result: PromptGetResult, promptName: string): string {
   return parts.join("\n\n").trim() || `(prompt "${promptName}" returned no text content)`;
 }
 
+interface GatheredPrompt {
+  server: string;
+  prompt: PromptDef;
+}
+
+/**
+ * Connect to every enabled server and collect (server, prompt) pairs.
+ * Returns the pairs plus a map of open connections the caller must close.
+ */
+async function gatherAllPrompts(
+  cwd: string,
+  report?: (msg: string, type?: "info" | "warning" | "error") => void,
+): Promise<{ items: GatheredPrompt[]; conns: Map<string, McpConnection> }> {
+  const servers = loadServers(cwd);
+  const items: GatheredPrompt[] = [];
+  const conns = new Map<string, McpConnection>();
+  if (servers.length === 0 && report) {
+    report("No enabled MCP servers found in mcp.json", "warning");
+  }
+  for (const { name, entry } of servers) {
+    try {
+      const conn = await connect(name, entry);
+      conns.set(name, conn);
+      const prompts = await listPrompts(conn);
+      for (const p of prompts) items.push({ server: name, prompt: p });
+    } catch (err) {
+      if (report) report(`MCP "${name}": ${(err as Error).message}`, "warning");
+    }
+  }
+  return { items, conns };
+}
+
 // ---------------------------------------------------------------------------
 // Extension entry point
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI): void {
+  // ---- Tools (work in every mode, including pi-web / RPC) ------------------
+  //
+  // pi-web runs sessions in RPC mode, whose client does not implement the
+  // extension dialog subprotocol (select/input). So the interactive /mcp-prompts
+  // command is TUI-only; these model-callable tools are the web-friendly path.
+  pi.registerTool({
+    name: "mcp_prompts_list",
+    label: "List MCP prompts",
+    description:
+      "List the prompts offered by configured MCP servers (the MCP prompts/get primitive, which Pi does not surface natively). Returns a JSON list of {server, name, title, description, arguments}.",
+    parameters: {
+      type: "object",
+      properties: {
+        server: {
+          type: "string",
+          description:
+            "Optional MCP server name to restrict the listing. Omit to list prompts from every enabled server.",
+        },
+      },
+      additionalProperties: false,
+    } as any,
+    async execute(_id, params: any) {
+      const { items } = await gatherAllPrompts(process.cwd());
+      const filtered = params?.server
+        ? items.filter((it) => it.server === params.server)
+        : items;
+      const out = filtered.map((it) => ({
+        server: it.server,
+        name: it.prompt.name,
+        title: it.prompt.title ?? it.prompt.description ?? it.prompt.name,
+        description: it.prompt.description ?? "",
+        arguments: (it.prompt.arguments ?? []).map((a) => ({
+          name: a.name,
+          required: !!a.required,
+          description: a.description ?? "",
+        })),
+      }));
+      return {
+        content: [{ type: "text", text: JSON.stringify(out, null, 2) }],
+        details: { tool: "mcp_prompts_list", count: out.length },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "mcp_prompts_get",
+    label: "Get MCP prompt",
+    description:
+      "Fetch the full text of one MCP prompt (MCP prompts/get) by server and prompt name, optionally filling its declared arguments. Returns the prompt content ready to use as instructions.",
+    parameters: {
+      type: "object",
+      properties: {
+        server: { type: "string", description: "MCP server name (as shown by mcp_prompts_list)." },
+        name: { type: "string", description: "Prompt name (as shown by mcp_prompts_list)." },
+        arguments: {
+          type: "object",
+          description: "Map of prompt argument name to value. Omit for prompts without arguments.",
+          additionalProperties: { type: "string" },
+        },
+      },
+      required: ["server", "name"],
+      additionalProperties: false,
+    } as any,
+    async execute(_id, params: any) {
+      const server = String(params?.server ?? "");
+      const name = String(params?.name ?? "");
+      if (!server || !name) {
+        return {
+          content: [{ type: "text", text: "Error: both 'server' and 'name' are required." }],
+          details: { tool: "mcp_prompts_get", error: true },
+        };
+      }
+      const { items, conns } = await gatherAllPrompts(process.cwd());
+      const match = items.find((it) => it.server === server && it.prompt.name === name);
+      try {
+        if (!match) {
+          return {
+            content: [
+              { type: "text", text: `Error: prompt "${name}" not found on server "${server}".` },
+            ],
+            details: { tool: "mcp_prompts_get", error: true },
+          };
+        }
+        const args: Record<string, string> = {};
+        for (const a of match.prompt.arguments ?? []) {
+          const v = params?.arguments?.[a.name];
+          if (v !== undefined) args[a.name] = String(v);
+        }
+        const result = await getPrompt(conns.get(server)!, name, args);
+        const text = renderPrompt(result, name);
+        return {
+          content: [{ type: "text", text }],
+          details: { tool: "mcp_prompts_get", server, name },
+        };
+      } finally {
+        conns.forEach((c) => c.close());
+      }
+    },
+  });
+
+  // ---- Command (TUI only: uses select/input dialogs) -----------------------
   pi.registerCommand("mcp-prompts", {
-    description: "Browse MCP server prompts and load one into the editor",
+    description: "Browse MCP server prompts and load one into the editor (TUI)",
     handler: async (_args, ctx) => {
-      const servers = loadServers(ctx.cwd);
-      if (servers.length === 0) {
-        ctx.ui.notify("No enabled MCP servers found in mcp.json", "warning");
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify(
+          "'mcp-prompts' needs the TUI. In pi-web/RPC use the mcp_prompts_list and mcp_prompts_get tools instead.",
+          "warning",
+        );
         return;
       }
-
-      // Collect all (server, prompt) pairs, opening connections lazily.
-      type Item = { server: string; prompt: PromptDef };
-      const items: Item[] = [];
-      const conns = new Map<string, McpConnection>();
-      for (const { name, entry } of servers) {
-        try {
-          const conn = await connect(name, entry);
-          conns.set(name, conn);
-          const prompts = await listPrompts(conn);
-          for (const p of prompts) items.push({ server: name, prompt: p });
-        } catch (err) {
-          ctx.ui.notify(`MCP "${name}": ${(err as Error).message}`, "warning");
-        }
-      }
-
+      const { items, conns } = await gatherAllPrompts(ctx.cwd, (m, t) => ctx.ui.notify(m, t));
       const closeAll = () => conns.forEach((c) => c.close());
 
       if (items.length === 0) {
